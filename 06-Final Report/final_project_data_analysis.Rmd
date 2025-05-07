@@ -1,0 +1,443 @@
+---
+title: "project"
+author: "Ifthekar Hussain, Sri Vasista Talagampala"
+date: "2025-04-26"
+output: html_document
+---
+
+```{r}
+setwd("C:/Users/ifthe/Downloads/")
+```
+
+
+```{r}
+getwd()
+```
+```{r}
+# Load gene expression counts
+counts <- read.table("GSE81089_readcounts_featurecounts1.tsv", 
+                     header = TRUE, sep = "\t", row.names = 1)
+
+# Check first few rows
+head(counts)
+```
+
+
+```{r}
+# Load metadata file
+meta <- read.table("GSE81089_series_matrix (2).txt", 
+                   header = TRUE, sep = "\t", fill = TRUE, comment.char = "!")
+
+# View first few lines
+head(meta)
+
+```
+
+```{r}
+# Read raw lines of the metadata file
+meta_lines <- readLines("GSE81089_series_matrix (2).txt")
+
+# Find the line with sample characteristics
+char_line <- grep("!Sample_characteristics_ch1", meta_lines, value = TRUE)
+
+# Split that line by tabs and remove the first element (label)
+sample_conditions <- unlist(strsplit(char_line, "\t"))[-1]
+
+# Check what we got
+sample_conditions[1:5]
+
+```
+
+```{r}
+# Extract last character (T or N)
+condition_raw <- unlist(strsplit(char_line, "\t"))[-1]
+group <- ifelse(grepl("T\"?$", condition_raw), "Tumor", "Normal")
+
+# Create sample info data frame
+sample_info <- data.frame()
+  sample = colnames(counts)
+  condition = factor(group)
+
+
+head(sample_info)
+
+```
+
+
+
+```{r}
+length(colnames(counts))
+
+```
+
+```{r}
+# Step 1: Read all lines as raw text
+meta_lines <- readLines("GSE81089_series_matrix (2).txt")
+
+# Step 2: Find the correct line with the tumor/normal info (only the first match)
+char_line <- grep("!Sample_characteristics_ch1", meta_lines, value = TRUE)[1]
+
+# Step 3: Split that line by tab, remove the first label
+raw_conditions <- unlist(strsplit(char_line, "\t"))[-1]
+
+# Step 4: Convert last character to Tumor or Normal
+group <- ifelse(grepl("T\\\"?$", raw_conditions), "Tumor", "Normal")
+
+# check length now
+length(group)
+
+```
+```{r}
+sample_info <- data.frame(
+  sample = colnames(counts),
+  condition = factor(group)
+)
+
+head(sample_info)
+
+```
+```{r}
+all(colnames(counts) == sample_info$sample)
+
+```
+
+```{r}
+# Install DESeq2 if not already installed
+if (!requireNamespace("DESeq2", quietly = TRUE)) {
+  BiocManager::install("DESeq2")
+}
+
+# Load the DESeq2 package
+library(DESeq2)
+
+# Remove genes (rows) that contain any NA values
+counts_clean <- counts[complete.cases(counts), ]
+
+# Confirm dimensions
+dim(counts_clean)
+
+# Create DESeq2 object again with clean data
+dds <- DESeqDataSetFromMatrix(countData = counts_clean,
+                              colData = sample_info,
+                              design = ~ condition)
+
+# Filter low-count genes
+dds <- dds[rowSums(counts(dds)) > 10, ]
+
+# Run DESeq2 pipeline
+dds <- DESeq(dds)
+
+# Get result table
+res <- results(dds)
+head(res)
+
+
+```
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("EnhancedVolcano")
+
+
+```
+
+```{r}
+library(EnhancedVolcano)
+
+```
+```{r}
+EnhancedVolcano(res,
+    lab = rownames(res),
+    x = 'log2FoldChange',
+    y = 'padj',
+    pCutoff = 0.05,
+    FCcutoff = 1,
+    title = "Volcano Plot: Tumor vs Normal",
+    subtitle = "GSE81089 DESeq2 Results",
+    pointSize = 2.0,
+    labSize = 3.0)
+
+```
+
+
+
+```{r}
+# Prepare values
+log2FC <- res$log2FoldChange
+negLogP <- -log10(res$padj)
+
+# Define significant genes
+is_significant <- res$padj < 0.05 & abs(log2FC) > 1
+
+# Set up plot
+plot(log2FC, negLogP,
+     pch = 20,
+     col = ifelse(is_significant, "red", "green"),
+     xlab = "log2(Fold Change) — Expression Difference",
+     ylab = "-log10(Adjusted P-value) — Significance",
+     main = "Volcano Plot: Tumor vs Normal (GSE81089)",
+     cex.main = 1.5,
+     cex.lab = 1.2,
+     cex.axis = 1.1)
+
+# Add cutoff lines
+abline(v = c(-1, 1), col = "blue", lty = 2, lwd = 1.5)  # Fold-change cutoffs
+abline(h = -log10(0.05), col = "blue", lty = 2, lwd = 1.5)  # P-value cutoff
+
+# Add legend
+legend("topright",
+       legend = c("Not Significant", "Significant differentially expressed genes (padj < 0.05 & |log2FC| > 1)"),
+       col = c("green", "red"),
+       pch = 20,
+       pt.cex = 1.5,
+       cex = 0.9)
+
+# Optionally label a few top genes (for learning/demo)
+top_genes <- rownames(res)[which(is_significant)][1:5]
+text(log2FC[top_genes], negLogP[top_genes], labels = top_genes,
+     pos = 3, cex = 0.8, col = "black")
+
+```
+
+
+
+```{r}
+install.packages("pheatmap")  # Only once
+library(pheatmap)
+
+```
+
+
+```{r}
+# Apply variance stabilizing transformation
+vsd <- vst(dds, blind = FALSE)
+
+# Select top 30 DE genes (lowest adjusted p-values)
+topGenes <- head(order(res$padj), 30)
+
+# Create matrix of expression values for top genes
+mat <- assay(vsd)[topGenes, ]
+
+# Add condition (Tumor/Normal) as annotation
+annotation <- as.data.frame(colData(dds)[, "condition", drop = FALSE])
+
+# Plot heatmap
+pheatmap(mat,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         annotation_col = annotation,
+         scale = "row",  # normalize per gene
+         fontsize_row = 8,
+         show_colnames = FALSE,
+         main = "Heatmap of Top 30 Differentially Expressed Genes")
+
+```
+
+
+
+```{r}
+# Load pheatmap if not already
+library(pheatmap)
+
+# 1. Apply variance stabilizing transformation
+vsd <- vst(dds, blind = FALSE)
+
+# 2. Select top 30 DE genes (lowest padj)
+topGenes <- head(order(res$padj), 30)
+
+# 3. Extract expression matrix for top genes
+mat <- assay(vsd)[topGenes, ]
+
+# 4. Create condition annotation
+annotation_col <- as.data.frame(colData(dds)[, "condition", drop = FALSE])
+colnames(annotation_col) <- "Condition"
+
+# 5. Define colors for Tumor and Normal manually
+annotation_colors <- list(
+  Condition = c(Tumor = "red", Normal = "skyblue")
+)
+
+# 6. Plot enhanced heatmap
+pheatmap(mat,
+         cluster_rows = TRUE,
+         cluster_cols = TRUE,
+         annotation_col = annotation_col,
+         annotation_colors = annotation_colors,
+         scale = "row",  # normalize each gene individually
+         color = colorRampPalette(c("navy", "white", "firebrick3"))(200), # smooth color gradient
+         fontsize_row = 8,
+         fontsize_col = 8,
+         main = "Heatmap of Top 30 Differentially Expressed Genes\n(Tumor vs Normal - GSE81089)",
+         fontsize_main = 14,
+         treeheight_row = 50,  # adjust tree height
+         treeheight_col = 50,
+         show_colnames = FALSE)
+
+```
+
+
+
+```{r}
+# Load required packages
+library(DESeq2)
+library(ggplot2)
+
+# Step 1: Get PCA data from vst-transformed counts
+vsd <- vst(dds, blind = FALSE)
+pcaData <- plotPCA(vsd, intgroup = "condition", returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+# Step 2: Create fully annotated plot
+ggplot(pcaData, aes(PC1, PC2, color = condition)) +
+  geom_point(size = 4, shape = 19, alpha = 0.9) +  # Round points
+  stat_ellipse(type = "norm", linetype = 2, size = 1.2, alpha = 0.4) +  # Ellipse for each group
+  labs(
+    title = "PCA Plot — Sample Clustering: Tumor vs Normal",
+    subtitle = "Each dot is a sample; ellipses show group spread",
+    x = paste0("PC1 (", percentVar[1], "% of total variance)"),
+    y = paste0("PC2 (", percentVar[2], "% of total variance)"),
+    color = "Sample Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.title = element_text(size = 13),
+    legend.text = element_text(size = 12)
+  ) +
+  scale_color_manual(values = c(Tumor = "red", Normal = "skyblue"))
+
+```
+
+
+
+```{r}
+# Define gene significance
+ma_data <- as.data.frame(res)
+ma_data$significance <- ifelse(is.na(ma_data$padj), "NA",
+                          ifelse(ma_data$padj < 0.05, "Significant", "Not Significant"))
+ma_data$significance <- factor(ma_data$significance, levels = c("Significant", "Not Significant", "NA"))
+
+# Plot with custom colors
+ggplot(ma_data, aes(x = baseMean, y = log2FoldChange, color = significance)) +
+  geom_point(size = 2, alpha = 0.7) +
+  scale_x_log10() +
+  geom_hline(yintercept = c(-1, 1), linetype = "dashed", color = "blue", size = 1) +
+  scale_color_manual(values = c(
+    "Significant" = "#E41A1C",        # bold red
+    "Not Significant" = "#999999",    # medium gray
+    "NA" = "#DCDCDC"                  # light gray
+  )) +
+  labs(
+    title = "MA Plot — Tumor vs Normal (GSE81089)",
+    subtitle = "Each dot = a gene; Red = significant DE genes (padj < 0.05)",
+    x = "Mean Expression (log10 scale)",
+    y = "log2(Fold Change)",
+    color = "Gene Type"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.title = element_text(size = 13),
+    legend.text = element_text(size = 12)
+  )
+
+
+```
+
+
+```{r}
+# Remove NA values and sort by fold change
+res_clean <- na.omit(res)
+res_sorted <- res_clean[order(res_clean$log2FoldChange), ]
+
+# Top 10 downregulated (lowest log2FC) and top 10 upregulated (highest log2FC)
+top_down <- head(res_sorted, 10)
+top_up <- tail(res_sorted, 10)
+top_genes <- rbind(top_down, top_up)
+
+# Create barplot
+library(ggplot2)
+ggplot(top_genes, aes(x = reorder(rownames(top_genes), log2FoldChange), 
+                      y = log2FoldChange, fill = log2FoldChange > 0)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top 10 Upregulated and Downregulated Genes",
+       x = "Gene",
+       y = "log2(Fold Change)",
+       fill = "Expression Direction") +
+  scale_fill_manual(values = c("red", "blue"), 
+                    labels = c("Downregulated in Tumor", "Upregulated in Tumor")) +
+  theme_minimal(base_size = 13)
+
+```
+
+
+
+```{r}
+ggplot(res_clean, aes(x = padj)) +
+  geom_histogram(binwidth = 0.01, fill = "steelblue", color = "white") +
+  labs(
+    title = "Distribution of Adjusted P-values",
+    x = "Adjusted P-value (padj) — Statistical significance of gene expression change",
+    y = "Number of Genes"
+  ) +
+  theme_minimal(base_size = 13)
+
+```
+
+
+```{r}
+ggplot(res_clean, aes(x = log2FoldChange)) +
+  geom_density(fill = "skyblue", alpha = 0.6) +
+  labs(
+    title = "Density Plot of log2(Fold Change)",
+    x = "log2(Fold Change) — Degree of Gene Expression Change (Tumor vs Normal)",
+    y = "Density — Frequency of Genes Showing a Given Fold Change"
+  ) +
+  theme_minimal(base_size = 13)
+
+```
+
+
+
+
+```{r}
+# Get the top gene with smallest adjusted p-value
+top_gene <- rownames(res_clean)[which.min(res_clean$padj)]
+
+# Extract normalized count data for that gene
+plot_data <- plotCounts(dds, gene = top_gene, intgroup = "condition", returnData = TRUE)
+
+# Plot using ggplot2 for full customization
+library(ggplot2)
+ggplot(plot_data, aes(x = condition, y = count)) +
+  geom_jitter(width = 0.2, size = 3, color = "darkblue", alpha = 0.6) +
+  geom_boxplot(alpha = 0.3, fill = "lightblue", outlier.shape = NA) +
+  labs(
+    title = paste("Normalized Expression of", top_gene),
+    subtitle = "Visualized by Sample Group (Tumor vs Normal)",
+    x = "Condition (Tumor / Normal)",
+    y = "Normalized Expression Count"
+  ) +
+  theme_minimal(base_size = 13)
+
+
+```
+
+
+```{r}
+# Filter significant genes
+sig_genes <- res_clean[res_clean$padj < 0.05, ]
+
+# Save to CSV
+write.csv(sig_genes, "significant_DEGs_GSE81089.csv", row.names = TRUE)
+
+```
